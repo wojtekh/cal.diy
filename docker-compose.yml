@@ -8,6 +8,17 @@
 # for one-off debugging, run it manually with `docker compose run studio`
 # rather than leaving it in the stack.
 #
+# BOTH services build from source -- as of this writing calcom/cal.diy has
+# no published tags on Docker Hub at all yet (the repo only split off from
+# calcom/cal.com recently; their image-publishing pipeline evidently isn't
+# live), so `image: calcom.docker.scarf.sh/calcom/cal.diy` (what upstream's
+# own docker-compose.yml references) fails to resolve. Confirmed via a real
+# failed deploy: "failed to resolve reference
+# ...calcom.docker.scarf.sh/calcom/cal.diy:latest: not found". Building from
+# source is slower (full Next.js monorepo build) but is the only path that
+# currently works -- revisit dropping back to prebuilt images once calcom/
+# cal.diy actually has tags on Docker Hub.
+#
 # Companion files: cal-diy.env.example (fill in and set as Coolify's
 # Environment Variables for this project), cal-diy-setup-guide.md (deploy
 # steps + known gotchas + how this wires into survey-parser).
@@ -44,7 +55,23 @@ services:
 
   calcom:
     container_name: cal-diy-web
-    image: calcom.docker.scarf.sh/calcom/cal.diy
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_WEBAPP_URL: ${NEXT_PUBLIC_WEBAPP_URL}
+        NEXT_PUBLIC_API_V2_URL: ${NEXT_PUBLIC_API_V2_URL}
+        NEXT_PUBLIC_LICENSE_CONSENT: ${NEXT_PUBLIC_LICENSE_CONSENT:-1}
+        NEXT_PUBLIC_WEBSITE_TERMS_URL: ${NEXT_PUBLIC_WEBSITE_TERMS_URL:-}
+        NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL: ${NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL:-}
+        NEXT_PUBLIC_SINGLE_ORG_SLUG: ${NEXT_PUBLIC_SINGLE_ORG_SLUG:-}
+        ORGANIZATIONS_ENABLED: ${ORGANIZATIONS_ENABLED:-}
+        CALCOM_TELEMETRY_DISABLED: ${CALCOM_TELEMETRY_DISABLED:-1}
+        NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+        CALENDSO_ENCRYPTION_KEY: ${CALENDSO_ENCRYPTION_KEY}
+        DATABASE_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+        DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+        CSP_POLICY: ${CSP_POLICY:-}
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -59,11 +86,6 @@ services:
   calcom-api:
     container_name: cal-diy-api
     build:
-      # No public API-only image is published -- upstream's own compose
-      # builds this one from source (apps/api/v2/Dockerfile) rather than
-      # pulling calcom.docker.scarf.sh/calcom/cal.diy for it. Coolify needs
-      # the repo checked out for this (see setup guide's "Getting the repo
-      # into Coolify" step) rather than an image-only deploy.
       context: .
       dockerfile: apps/api/v2/Dockerfile
       args:
