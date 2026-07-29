@@ -1,138 +1,96 @@
-# Use postgres/example user/password credentials
-
-volumes:
-  database-data:
-  redis-data:
-
-networks:
-  stack:
-    name: stack
-    external: false
+# cal.diy -- self-hosted Cal.com fork (MIT-licensed as of the calcom/cal.com ->
+# calcom/cal.diy split, source: https://github.com/calcom/cal.diy).
+# Deployed as its OWN Coolify project -- separate Postgres/Redis from the
+# dograh stack (dograh-docker-compose-v3.yaml), no shared network. Trimmed
+# from upstream's root docker-compose.yml: dropped the "studio" (Prisma
+# Studio) service entirely -- upstream's own comment says to remove it in
+# production to avoid exposing raw DB access publicly. If you ever need it
+# for one-off debugging, run it manually with `docker compose run studio`
+# rather than leaving it in the stack.
+#
+# Companion files: cal-diy.env.example (fill in and set as Coolify's
+# Environment Variables for this project), cal-diy-setup-guide.md (deploy
+# steps + known gotchas + how this wires into survey-parser).
 
 services:
   database:
-    container_name: database
-    image: postgres
-    restart: always
-    volumes:
-      - database-data:/var/lib/postgresql
+    container_name: cal-diy-database
+    image: postgres:16
+    restart: unless-stopped
     environment:
-      - POSTGRES_USER=unicorn_user
-      - POSTGRES_PASSWORD=magical_password
-      - POSTGRES_DB=calendso
-    networks:
-      - stack
+      POSTGRES_USER: ${POSTGRES_USER:-caldiy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-calendso}
+    volumes:
+      - cal-diy-database-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-caldiy}"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
   redis:
-    container_name: redis
-    image: redis:latest
-    restart: always
+    container_name: cal-diy-redis
+    image: redis:7
+    restart: unless-stopped
+    command: --requirepass ${REDIS_PASSWORD}
     volumes:
-      - redis-data:/data
-    networks:
-      - stack
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - cal-diy-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
 
   calcom:
+    container_name: cal-diy-web
     image: calcom.docker.scarf.sh/calcom/cal.diy
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_WEBAPP_URL: ${NEXT_PUBLIC_WEBAPP_URL}
-        NEXT_PUBLIC_API_V2_URL: ${NEXT_PUBLIC_API_V2_URL}
-        NEXT_PUBLIC_LICENSE_CONSENT: ${NEXT_PUBLIC_LICENSE_CONSENT}
-        NEXT_PUBLIC_WEBSITE_TERMS_URL: ${NEXT_PUBLIC_WEBSITE_TERMS_URL}
-        NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL: ${NEXT_PUBLIC_WEBSITE_PRIVACY_POLICY_URL}
-        NEXT_PUBLIC_SINGLE_ORG_SLUG: ${NEXT_PUBLIC_SINGLE_ORG_SLUG}
-        ORGANIZATIONS_ENABLED: ${ORGANIZATIONS_ENABLED}
-        CALCOM_TELEMETRY_DISABLED: ${CALCOM_TELEMETRY_DISABLED}
-        NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-        CALENDSO_ENCRYPTION_KEY: ${CALENDSO_ENCRYPTION_KEY}
-        DATABASE_URL: ${DATABASE_URL}
-        DATABASE_DIRECT_URL: ${DATABASE_URL}
-        CSP_POLICY: ${CSP_POLICY}
-    restart: always
-    networks:
-      - stack
+    restart: unless-stopped
     ports:
-      - 3000:3000
+      - "3000:3000"
     env_file: .env
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DATABASE_HOST}/${POSTGRES_DB}
-      - DATABASE_DIRECT_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+      - DATABASE_DIRECT_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
     depends_on:
-      - database
+      database:
+        condition: service_healthy
 
   calcom-api:
-    container_name: calcom-api
+    container_name: cal-diy-api
     build:
+      # No public API-only image is published -- upstream's own compose
+      # builds this one from source (apps/api/v2/Dockerfile) rather than
+      # pulling calcom.docker.scarf.sh/calcom/cal.diy for it. Coolify needs
+      # the repo checked out for this (see setup guide's "Getting the repo
+      # into Coolify" step) rather than an image-only deploy.
       context: .
       dockerfile: apps/api/v2/Dockerfile
       args:
-        DATABASE_URL: ${DATABASE_URL}
-        DATABASE_DIRECT_URL: ${DATABASE_URL}
-    restart: always
-    networks:
-      - stack
+        DATABASE_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+        DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+    restart: unless-stopped
     ports:
-      - "${API_PORT:-80}:${API_PORT:-80}"
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
     env_file: .env
     environment:
-      - NODE_ENV=${NODE_ENV}
-      - API_PORT=${API_PORT:-80}
-      - API_URL=${API_URL}
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DATABASE_HOST}/${POSTGRES_DB}
-      - DATABASE_READ_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DATABASE_HOST}/${POSTGRES_DB}
-      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DATABASE_HOST}/${POSTGRES_DB}
-      - DATABASE_DIRECT_URL=${DATABASE_URL}
+      - NODE_ENV=production
+      - API_PORT=${API_PORT:-8080}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+      - DATABASE_READ_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+      - DATABASE_WRITE_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+      - DATABASE_DIRECT_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - JWT_SECRET=${JWT_SECRET}
-      - REDIS_URL=${REDIS_URL}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - API_KEY_PREFIX=${API_KEY_PREFIX}
-      - WEB_APP_URL=${WEB_APP_URL}
-      - IS_E2E=${IS_E2E:-false}
-      - REWRITE_API_V2_PREFIX=${REWRITE_API_V2_PREFIX:-true}
-      - CALCOM_LICENSE_KEY=${CALCOM_LICENSE_KEY}
-      - NEXT_PUBLIC_VAPID_PUBLIC_KEY=${NEXT_PUBLIC_VAPID_PUBLIC_KEY}
-      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}
-      - STRIPE_API_KEY=${STRIPE_API_KEY}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
-      - STRIPE_PRICE_ID_STARTER=${STRIPE_PRICE_ID_STARTER}
-      - STRIPE_PRICE_ID_STARTER_OVERAGE=${STRIPE_PRICE_ID_STARTER_OVERAGE}
-      - STRIPE_PRICE_ID_ESSENTIALS=${STRIPE_PRICE_ID_ESSENTIALS}
-      - STRIPE_PRICE_ID_ESSENTIALS_OVERAGE=${STRIPE_PRICE_ID_ESSENTIALS_OVERAGE}
-      - STRIPE_PRICE_ID_ENTERPRISE=${STRIPE_PRICE_ID_ENTERPRISE}
-      - STRIPE_PRICE_ID_ENTERPRISE_OVERAGE=${STRIPE_PRICE_ID_ENTERPRISE_OVERAGE}
-      - STRIPE_TEAM_MONTHLY_PRICE_ID=${STRIPE_TEAM_MONTHLY_PRICE_ID}
-      - IS_TEAM_BILLING_ENABLED=${IS_TEAM_BILLING_ENABLED:-false}
-      - AXIOM_DATASET=${AXIOM_DATASET}
-      - AXIOM_TOKEN=${AXIOM_TOKEN}
-      - LOGGER_BRIDGE_LOG_LEVEL=${LOGGER_BRIDGE_LOG_LEVEL}
-      - DOCS_URL=${DOCS_URL}
-      - GET_LICENSE_KEY_URL=${GET_LICENSE_KEY_URL}
+      - API_KEY_PREFIX=${API_KEY_PREFIX:-cal_}
+      - WEB_APP_URL=${NEXT_PUBLIC_WEBAPP_URL}
     depends_on:
-      - database
-      - redis
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
-  # Optional use of Prisma Studio. In production, comment out or remove the section below to prevent unwanted access to your database.
-  studio:
-    image: calcom.docker.scarf.sh/calcom/cal.diy
-    restart: always
-    networks:
-      - stack
-    ports:
-      - 5555:5555
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DATABASE_HOST}/${POSTGRES_DB}
-      - DATABASE_DIRECT_URL=${DATABASE_URL}
-    depends_on:
-      - database
-    command:
-      - npx
-      - prisma
-      - studio
-# END SECTION: Optional use of Prisma Studio.
+volumes:
+  cal-diy-database-data:
+  cal-diy-redis-data:
