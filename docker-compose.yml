@@ -22,6 +22,16 @@
 # Companion files: cal-diy.env.example (fill in and set as Coolify's
 # Environment Variables for this project), cal-diy-setup-guide.md (deploy
 # steps + known gotchas + how this wires into survey-parser).
+#
+# calcom/calcom-api use `expose` (internal-network-only), not `ports` --
+# deliberately NOT bound to a host port. Coolify's own proxy handles public
+# routing via each service's "Domains" setting (see setup guide step 3),
+# and a raw `ports:` host-bind actively conflicts with other services
+# sharing this same box over the literal port number -- confirmed via a
+# real failed deploy: calcom-api's host port 8080 bind failed outright
+# because something else on the box already had it ("Bind for 0.0.0.0:8080
+# failed: port is already allocated"). `expose` avoids that whole class of
+# conflict since nothing needs the literal port number to be free host-wide.
 
 services:
   database:
@@ -73,8 +83,8 @@ services:
         DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
         CSP_POLICY: ${CSP_POLICY:-}
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     env_file: .env
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
@@ -92,8 +102,8 @@ services:
         DATABASE_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
         DATABASE_DIRECT_URL: postgresql://${POSTGRES_USER:-caldiy}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB:-calendso}
     restart: unless-stopped
-    ports:
-      - "${API_PORT:-8080}:${API_PORT:-8080}"
+    expose:
+      - "${API_PORT:-8080}"
     env_file: .env
     environment:
       - NODE_ENV=production
